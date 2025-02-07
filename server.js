@@ -1,138 +1,170 @@
-// Import required modules
 const express = require("express");
-const passport = require("passport");
-const JwtStrategy = require("passport-jwt").Strategy;
-const extractJwt = require("passport-jwt").ExtractJwt;
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const Ajv = require("ajv");
-const ajv = new Ajv();
-const loginSuccessfulSchema = {
-    type: "object",
-    required: ["jsonWebToken"],
-    properties: {
-        jsonWebToken: { type: "string" }
-    }
-};
-
-// Initialize Express app
 const app = express();
+const jwt = require("jsonwebtoken");
+const passport = require("passport");
+const JwtStrategy = require('passport-jwt').Strategy;
+const ExtractJwt = require('passport-jwt').ExtractJwt;
+
 const port = process.env.PORT || 3000;
 
-// Middleware
-app.use(express.json());
-app.use(passport.initialize());
+app.use(express.json()); // for parsing application/json
 
-// In-memory user store (for demonstration purposes)
-const users = [];
-const highScores = [];
+// ------ WRITE YOUR SOLUTION HERE BELOW ------//
 
 const MYSECRETJWTKEY = "mysecret";
+const userDetails = [];
+const scoreBoard = [];
+app.use(passport.initialize());
 
-// JWT Strategy Configuration
-const optionsForJwtValidation = {
-    jwtFromRequest: extractJwt.fromAuthHeaderAsBearerToken(),
-    secretOrKey: MYSECRETJWTKEY,
-};
+//------------------------singnup route to register a user--------------------------------//
+app.post("/signup", (req,res) => {
+  const userHandle = req.body.userHandle;
+  const password = req.body.password;
 
-// Passport JWT Strategy
-passport.use(new JwtStrategy(optionsForJwtValidation, function (payload, done) {
-    const user = users.find(user => user.userHandle === payload.userHandle);
-    return user ? done(null, user) : done(null, false);
+  //validate inputs
+  if(!userHandle || !password){
+    return res.status(400).json({message: "Invalid request body"})
+  }
+  if(userHandle.length < 6){
+    return res.status(400).json({message: "Invalid request body"})
+  }
+  if(password.length < 6){
+    return res.status(400).json({message: "Invalid request body"})
+  }
+
+  // register the user
+    userDetails.push({userHandle, password});
+    return res.status(201).json({message:"User registered successfully"})
+  
+})
+
+
+//-----------------------login route--------------------------//
+//---function for access token creation---//
+const generateAccessToken = (user) => {
+  return jwt.sign(
+      {userHandle : user}, 
+      MYSECRETJWTKEY, 
+      { expiresIn: '10m' }
+  )
+}
+app.post("/login", (req,res) => {
+  const userHandle = req.body.userHandle;
+  const password = req.body.password;
+
+  //check for extra fields
+  const allowedFields = ["userHandle", "password"];
+  const receivedFields = Object.keys(req.body);
+
+  const extraFields = receivedFields.filter(field => !allowedFields.includes(field));
+
+  if (extraFields.length > 0) {
+    return res.status(400).json({ message: "Bad Request" });
+  }
+
+  // validate inputs
+  if (!userHandle || !password || userHandle == "" || password == ""){
+    return res.status(400).json({message: "Bad Request"})
+  }
+  if (typeof userHandle !== "string" || typeof password !== "string") {
+    return res.status(400).json({ message: "Bad Request" });
+  }
+  if(userHandle.length < 6){
+    return res.status(400).json({message: "Bad Request"})
+  }
+  if(password.length < 6){
+    return res.status(400).json({message: "Bad Request"})
+  }
+
+  // check user exists in db
+  const foundUser = userDetails.find((e) => e.userHandle === userHandle )
+  if (!foundUser || foundUser.password !== password) {
+    return res.status(401).json({ message: "Unauthorized, incorrect username or password" });
+  }
+  const accessToken = generateAccessToken(foundUser.userHandle)
+    res.status(200).json({
+      jsonWebToken:accessToken
+    })  
+})
+
+
+//-----------------------post high score route--------------------------//
+//Middleware for JWT authentication and user verification
+//Extracts the JWT from the Authorization header (Bearer token) and verifies JWT using the secret key
+const optionsForJWTValidation = {
+  jwtFromRequest : ExtractJwt.fromAuthHeaderAsBearerToken(),
+  secretOrKey : MYSECRETJWTKEY
+}
+
+// Sets up Passport to use JWT for authentication
+passport.use( new JwtStrategy(optionsForJWTValidation, function (payload,done){
+  //checks if the user in the JWT exists in the database
+  const user = userDetails.find(user => user.userHandle === payload.userHandle);
+  // If the user is found, they are authenticated; if not, an error message is returned.
+  return user ? done(null, user) : done(null, false, { message: "User not found. Invalid token " });
 }));
 
-//  Registration Route
-app.post("/signup", (req, res) => {
-    const { userHandle, password } = req.body;
+app.post("/high-scores", passport.authenticate('jwt', {session : false}), (req, res) => {
+  const level = req.body.level;
+  const userHandle = req.body.userHandle;
+  const score = req.body.score;
+  const timestamp = req.body.timestamp;
 
-    if (!userHandle || !password) {
-        return res.status(400).json({ message: "UserHandle and password are required." });
-    }
-    if (userHandle.length < 6) {
-        return res.status(400).json({ message: "UserHandle must be at least 6 characters." });
-    }
-    if (password.length < 6) {
-        return res.status(400).json({ message: "Password must be at least 6 characters." });
-    }
-    if (users.find(u => u.userHandle === userHandle)) {
-        return res.status(400).json({ message: "User already exists." });
-    }
-
-    // Hash password and store user
-    const hashedPassword = bcrypt.hashSync(password, 10);
-    users.push({ userHandle, password: hashedPassword });
-
-    // Generate JWT token
-    const token = jwt.sign({ userHandle }, MYSECRETJWTKEY);
-    return res.status(201).json({ jsonWebToken: token });
-});
-
-//  Login Route
-app.post("/login", (req, res) => {
-  const { userHandle, password } = req.body;
-
-  if (!userHandle || !password || typeof userHandle !== "string" || typeof password !== "string") {
-      return res.status(400).json({ message: "Invalid request. userHandle and password must be strings." });
+  if(!level || !userHandle || !score || !timestamp){
+    return res.status(400).json({message: "Invalid request body"})
   }
 
-  const user = users.find(u => u.userHandle === userHandle);
-  if (!user || !bcrypt.compareSync(password, user.password)) {
-      return res.status(401).json({ message: "Invalid username or password." });
-  }
-  
-  const token = jwt.sign({ userHandle }, MYSECRETJWTKEY);
-  res.status(201).json({ jsonWebToken: token });
-});
+  scoreBoard.push({level, userHandle, score, timestamp});
+  return res.status(201).json({message:"High score posted successfully"})
+})
 
-// Fetch High Scores (Optional Filtering by Level and Pagination)
+
 app.get("/high-scores", (req, res) => {
-    const { level, page } = req.query;
-    let filteredScores = level ? highScores.filter(score => score.level === level) : highScores;
-    
-    // Sort scores from highest to lowest
-    filteredScores.sort((a, b) => b.score - a.score);
-    
-    // Pagination logic
-    const pageSize = 20;
-    const pageNumber = parseInt(page) || 1;
-    const startIndex = (pageNumber - 1) * pageSize;
-    const paginatedScores = filteredScores.slice(startIndex, startIndex + pageSize);
-    
-    res.status(200).json(paginatedScores);
-});
+  //get query parameters to variables
+  const level = req.query.level;
+  const page = Number(req.query.page)
 
-//  Submit High Score (Requires Authentication)
-app.post("/high-scores", passport.authenticate("jwt", { session: false }), (req, res) => {
-    const { level, score, timestamp } = req.body;
-    const userHandle = req.user?.userHandle;
+  //sort score array to decending order
+  scoreBoard.sort((a,b) => b.score - a.score);
 
-    if (!level || !userHandle || score === undefined || !timestamp) {
-        return res.status(400).json({ message: "All fields (level, userHandle, score, timestamp) are required." });
+  //assign scores to a new array according to level
+  const selectedScores = scoreBoard.filter((e) => e.level == level)
+  let resultArray =[]
+
+  //check that scores available
+  if(selectedScores.length > 0){
+    //check page number is given or not and if not show first page
+    if(!page){
+      resultArray = scoreBoard.slice(0,20)
     }
-
-    highScores.push({ level, userHandle, score, timestamp });
-    res.status(201).json({ message: "High score added." });
+    //if page number given show score details according to page number
+    else{
+      let totalPageCount = 0
+      if((selectedScores.length % 20) != 0){
+        totalPageCount = (Math.floor(selectedScores.length / 20)) + 1;
+        let max = page*20;
+        let min = max-20;
+        resultArray = scoreBoard.slice((min+1),(max))
+      } 
+    }
+    return res.status(200).json(resultArray)  
+  }
+  //return empty array if given level not found
+  else{
+    return res.status(200).json([])  
+  }
+   
 });
+//------ WRITE YOUR SOLUTION ABOVE THIS LINE ------//
 
-//  Start & Close Functions (for Testing)
 let serverInstance = null;
 module.exports = {
-    start: function () {
-        if (!serverInstance) {
-            serverInstance = app.listen(port, () => {
-                console.log(`Server listening at http://localhost:${port}`);
-            });
-        }
-    },
-    close: function () {
-        if (serverInstance) {
-            serverInstance.close();
-            serverInstance = null;
-        }
-    }
+  start: function () {
+    serverInstance = app.listen(port, () => {
+      console.log(`Example app listening at http://localhost:${port}`);
+    });
+  },
+  close: function () {
+    serverInstance.close();
+  },
 };
-
-//  Start the server if this file is run directly
-if (require.main === module) {
-    module.exports.start();
-}
